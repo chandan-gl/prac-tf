@@ -22,19 +22,24 @@ jobs:
 
     # Define environment variables (reusing variables from the main pipeline)
     env:
-      TF_WORKING_DIRECTORY: '.' # Terraform files are assumed to be in the root
+      TF_WORKING_DIRECTORY: '.' 
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      # Terraform files are assumed to be in the root
       
     steps:
       - name: Checkout Code (Destroy Branch)
         uses: actions/checkout@v4
 
-      # Log into Azure using a Service Principal (same secrets as main CI/CD)
-      - name: Azure Login
-        uses: azure/login@v1
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    #   # Log into Azure using a Service Principal (same secrets as main CI/CD)
+    #   - name: Azure Login
+    #     uses: azure/login@v1
+    #     with:
+    #       client-id: ${{ secrets.AZURE_CLIENT_ID }}
+    #       tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+    #       subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
