@@ -1,33 +1,179 @@
-name: Terraform CI/CD
+name: Terraform Azure CI/CD
 
 on:
   push:
     branches:
       - main
 
+# Define reusable environment variables
+env:
+  TF_WORKING_DIRECTORY: '.' # Assuming Terraform files are in the repository root
+  TF_PLAN_FILE: 'tfplan'    # Name of the saved binary plan file
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+
 jobs:
-  terraform:
-    name: 'Terraform Apply'
+
+  # ====================================================================
+  # JOB 1: VALIDATE (Runs on Push/PR)
+  # Initializes backend, validates syntax, and checks formatting.
+  # ====================================================================
+  validate:
+    name: 'Terraform Validate'
     runs-on: ubuntu-latest
-    env:
-      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+    
+    # Credentials for Azure authentication (used for backend init/lock)
+    environment: validation # Optional: use a minimal environment for secrets safety
+    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Log into Azure using a Service Principal via GitHub Secrets.
+      # # Requires creating three secrets in GitHub: AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID
+      # - name: Azure Login
+      #   uses: azure/login@v1
+      #   with:
+      #     client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      #     client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+      #     tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      #     subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          # This action sets the ARM_* environment variables required by the Terraform provider
+
+      # Installs the specified version of Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5 # Use a modern, stable version
+
+      # Initialize backend (same parameters used in ADO pipeline)
+      - name: Terraform Init
+        id: init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=adf_project" \
+            -backend-config="storage_account_name=practeststorage" \
+            -backend-config="container_name=tfstate0310" \
+            -backend-config="key=tfstate"
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
+
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
+
+
+  # ====================================================================
+  # JOB 2: PLAN (Runs only after validate succeeds)
+  # Generates the execution plan and saves it as an artifact.
+  # ====================================================================
+  plan:
+    name: 'Terraform Plan & Artifact'
+    runs-on: ubuntu-latest
+    needs: [validate]
+    environment: plan_stage # Optional: Use an environment for secrets/variables
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # - name: Azure Login
+      #   uses: azure/login@v1
+      #   with:
+      #     client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      #     client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+      #     tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      #     subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
+        uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.8.5
 
+      # Re-initialize the backend state in this new job context
       - name: Terraform Init
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=adf_project" \
+            -backend-config="storage_account_name=practeststorage" \
+            -backend-config="container_name=tfstate0310" \
+            -backend-config="key=tfstate"
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
 
+      # Generate the plan and save it to the workspace
       - name: Terraform Plan
-        run: terraform plan -out=tfplan
+        id: plan
+        run: terraform plan -out=${{ env.TF_PLAN_FILE }} -detailed-exitcode
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
 
+      # Upload the binary plan file as an artifact
+      - name: Upload Terraform Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-artifact
+          path: ${{ env.TF_WORKING_DIRECTORY }}/${{ env.TF_PLAN_FILE }}
+
+
+  # ====================================================================
+  # JOB 3: APPLY (Runs only after plan succeeds, REQUIRES APPROVAL)
+  # Downloads artifact and applies the pre-approved plan.
+  # ====================================================================
+  apply:
+    name: 'Terraform Apply'
+    runs-on: ubuntu-latest
+    needs: [plan]
+    
+    # Use environment for manual approval gating and traceability.
+    # You MUST create a protected environment named 'production' in your GitHub repository settings.
+    environment: 
+      name: production
+      url: https://portal.azure.com/
+      
+    # Only run the apply job when pushing to master, not on PRs
+    if: github.event_name == 'push' 
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # - name: Azure Login
+      #   uses: azure/login@v1
+      #   with:
+      #     client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      #     client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+      #     tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      #     subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      # Download the plan artifact created in the 'plan' job
+      - name: Download Terraform Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan-artifact
+          path: ${{ env.TF_WORKING_DIRECTORY }}
+
+      # Re-initialize the backend state
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=adf_project" \
+            -backend-config="storage_account_name=practeststorage" \
+            -backend-config="container_name=tfstate0310" \
+            -backend-config="key=tfstate"
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
+        
+      # Apply the downloaded binary plan file
       - name: Terraform Apply
-        run: terraform apply -auto-approve tfplan
+        run: terraform apply -auto-approve ${{ env.TF_PLAN_FILE }}
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
