@@ -1,0 +1,65 @@
+name: Infrastructure Destruction
+
+# This workflow is highly restricted and only runs when changes are 
+# pushed directly to the 'destroy' branch.
+on:
+  push:
+    branches:
+      - destroy # CRITICAL: Only runs on the dedicated destroy branch
+
+# The destroy job should be configured with the highest security.
+jobs:
+  destroy:
+    name: 'Terraform Destroy'
+    runs-on: ubuntu-latest
+    
+    # CRITICAL SECURITY STEP: 
+    # This environment MUST be configured in GitHub settings with 
+    # 'Required reviewers' and 'Branch protection rules' for the 'destroy' branch.
+    environment: 
+      name: destroy-production
+      url: https://portal.azure.com/
+
+    # Define environment variables (reusing variables from the main pipeline)
+    env:
+      TF_WORKING_DIRECTORY: '.' # Terraform files are assumed to be in the root
+      
+    steps:
+      - name: Checkout Code (Destroy Branch)
+        uses: actions/checkout@v4
+
+      # Log into Azure using a Service Principal (same secrets as main CI/CD)
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      # Initialize backend to load the current state file
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=adf_project" \
+            -backend-config="storage_account_name=practeststorage" \
+            -backend-config="container_name=tfstate0310" \
+            -backend-config="key=tfstate"
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
+        
+      # Generate the destruction plan
+      - name: Terraform Plan - Destroy
+        id: destroy_plan
+        run: terraform plan -destroy -out=tfdestroyplan
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
+
+      # Execute the destructive command
+      # -auto-approve is used because the manual approval is handled by the GitHub Environment.
+      - name: Terraform Apply - Execute Destruction
+        id: destroy_apply
+        run: terraform apply -auto-approve tfdestroyplan
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
