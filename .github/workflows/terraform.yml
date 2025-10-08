@@ -1,216 +1,179 @@
-name: Terraform Azure CI/CD - Multi-Environment
+name: Terraform Azure CI/CD
 
 on:
   push:
     branches:
       - feature/module
-      - production  # Listen for pushes to both main (for dev) and production branches
 
-# Define reusable secrets and parameters
+# Define reusable environment variables
 env:
-  # General Terraform settings
-  TF_PLAN_FILE: 'tfplan' 
-  
-  # Azure Service Principal Credentials (Used by the provider to authenticate)
+  TF_PLAN_FILE: 'tfplan'    # Name of the saved binary plan file
   ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
   ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
   ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
   ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
 
-  # Azure Backend Storage Configuration (These must exist beforehand)
-  BACKEND_RG_NAME: adf_project
-  BACKEND_STORAGE_ACCOUNT: practeststorage
-  BACKEND_CONTAINER_NAME: tfstate0310
-
 jobs:
 
   # ====================================================================
-  # JOB 1: PLAN - DEVELOPMENT (Triggered by 'main' branch)
+  # JOB 1: VALIDATE (Runs on Push/PR)
+  # Initializes backend, validates syntax, and checks formatting.
   # ====================================================================
-  dev_plan:
-    name: 'Dev - Plan'
+  validate:
+    name: 'Terraform Validate'
     runs-on: ubuntu-latest
-    # Only run this job when pushing to the 'main' branch
-    if: github.ref == 'refs/heads/feature/module'
     
-    # Define environment-specific variables for this job
     env:
       ENV_NAME: dev
       # TF_ENV_DIR points to the root directory for this environment's code
       TF_ENV_DIR: environments/dev
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Log into Azure using a Service Principal via GitHub Secrets.
+      # # Requires creating three secrets in GitHub: AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID
+      # - name: Azure Login
+      #   uses: azure/login@v1
+      #   with:
+      #     client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      #     client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+      #     tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      #     subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          # This action sets the ARM_* environment variables required by the Terraform provider
+
+      # Installs the specified version of Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5 # Use a modern, stable version
+
+      # Initialize backend (same parameters used in ADO pipeline)
+      - name: Terraform Init
+        id: init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=adf_project" \
+            -backend-config="storage_account_name=practeststorage" \
+            -backend-config="container_name=tfstate0310" \
+            -backend-config="key=dev/keyvault.terraform.tfstate"
+        working-directory: ${{ env.TF_ENV_DIR }}
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate
+        working-directory: ${{ env.TF_ENV_DIR }}
+
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        working-directory: ${{ env.TF_ENV_DIR }}
+
+
+  # ====================================================================
+  # JOB 2: PLAN (Runs only after validate succeeds)
+  # Generates the execution plan and saves it as an artifact.
+  # ====================================================================
+  plan:
+    name: 'Terraform Plan & Artifact'
+    runs-on: ubuntu-latest
+    needs: [validate]
+    environment: plan_stage # Optional: Use an environment for secrets/variables
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      # - name: Azure Login
+      #   uses: azure/login@v1
+      #   with:
+      #     client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      #     client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+      #     tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      #     subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.8.5
 
-      # Initialize backend with environment-specific state key
-      - name: Terraform Init & Validate
-        id: init
+      # Re-initialize the backend state in this new job context
+      - name: Terraform Init
         run: |
-          # Use -reconfigure to force use of backend config args if state file exists
-          terraform init -reconfigure \
-            -backend-config="resource_group_name=${{ env.BACKEND_RG_NAME }}" \
-            -backend-config="storage_account_name=${{ env.BACKEND_STORAGE_ACCOUNT }}" \
-            -backend-config="container_name=${{ env.BACKEND_CONTAINER_NAME }}" \
-            -backend-config="key=${{ env.ENV_NAME }}/${{ github.sha }}.tfstate"
-          
-          # Validate and format check inside the environment directory
-          terraform validate
-          terraform fmt -check -recursive
+          terraform init \
+            -backend-config="resource_group_name=adf_project" \
+            -backend-config="storage_account_name=practeststorage" \
+            -backend-config="container_name=tfstate0310" \
+            -backend-config="key=dev/keyvault.terraform.tfstate"
         working-directory: ${{ env.TF_ENV_DIR }}
 
-      # Generate the plan using the environment's tfvars file
+      # Generate the plan and save it to the workspace
       - name: Terraform Plan
         id: plan
         run: terraform plan -out=${{ env.TF_PLAN_FILE }} -var-file="${{ env.ENV_NAME }}.tfvars" -detailed-exitcode
         working-directory: ${{ env.TF_ENV_DIR }}
 
+      # Upload the binary plan file as an artifact
       - name: Upload Terraform Plan Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dev-plan-artifact
+          name: terraform-plan-artifact
           path: ${{ env.TF_ENV_DIR }}/${{ env.TF_PLAN_FILE }}
 
+
   # ====================================================================
-  # JOB 2: APPLY - DEVELOPMENT (Auto-apply on 'main' branch)
+  # JOB 3: APPLY (Runs only after plan succeeds, REQUIRES APPROVAL)
+  # Downloads artifact and applies the pre-approved plan.
   # ====================================================================
-  dev_apply:
-    name: 'Dev - Apply'
+  apply:
+    name: 'Terraform Apply'
     runs-on: ubuntu-latest
-    needs: [dev_plan]
-    if: success() && github.ref == 'refs/heads/feature/module' # Only apply if plan succeeded on main branch
+    needs: [plan]
     
-    # Use a GitHub Environment for logical separation (optional, but good practice)
-    environment: development 
-    
-    env:
-      ENV_NAME: dev
-      TF_ENV_DIR: environments/dev
+    # Use environment for manual approval gating and traceability.
+    # You MUST create a protected environment named 'production' in your GitHub repository settings.
+    environment: 
+      name: production
+      url: https://portal.azure.com/
+      
+    # Only run the apply job when pushing to master, not on PRs
+    if: github.event_name == 'push' 
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      # - name: Azure Login
+      #   uses: azure/login@v1
+      #   with:
+      #     client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      #     client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+      #     tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      #     subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.8.5
 
+      # Download the plan artifact created in the 'plan' job
       - name: Download Terraform Plan Artifact
         uses: actions/download-artifact@v4
         with:
-          name: dev-plan-artifact
+          name: terraform-plan-artifact
           path: ${{ env.TF_ENV_DIR }}
 
-      - name: Terraform Init (for apply context)
+      # Re-initialize the backend state
+      - name: Terraform Init
         run: |
-          terraform init -reconfigure \
-            -backend-config="resource_group_name=${{ env.BACKEND_RG_NAME }}" \
-            -backend-config="storage_account_name=${{ env.BACKEND_STORAGE_ACCOUNT }}" \
-            -backend-config="container_name=${{ env.BACKEND_CONTAINER_NAME }}" \
-            -backend-config="key=${{ env.ENV_NAME }}/${{ github.sha }}.tfstate"
+          terraform init \
+            -backend-config="resource_group_name=adf_project" \
+            -backend-config="storage_account_name=practeststorage" \
+            -backend-config="container_name=tfstate0310" \
+            -backend-config="key=dev/keyvault.terraform.tfstate"
         working-directory: ${{ env.TF_ENV_DIR }}
         
       # Apply the downloaded binary plan file
       - name: Terraform Apply
-        run: terraform apply -auto-approve ${{ env.TF_PLAN_FILE }}
-        working-directory: ${{ env.TF_ENV_DIR }}
-
-
-  # ====================================================================
-  # JOB 3: PLAN - PRODUCTION (Triggered by 'production' branch)
-  # ====================================================================
-  prod_plan:
-    name: 'Prod - Plan'
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/production'
-    
-    env:
-      ENV_NAME: prod
-      TF_ENV_DIR: environments/prod # Note the different directory
-      
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.8.5
-
-      # Initialize backend with environment-specific state key
-      - name: Terraform Init & Validate
-        run: |
-          terraform init -reconfigure \
-            -backend-config="resource_group_name=${{ env.BACKEND_RG_NAME }}" \
-            -backend-config="storage_account_name=${{ env.BACKEND_STORAGE_ACCOUNT }}" \
-            -backend-config="container_name=${{ env.BACKEND_CONTAINER_NAME }}" \
-            -backend-config="key=${{ env.ENV_NAME }}/${{ github.sha }}.tfstate"
-          
-          terraform validate
-          terraform fmt -check -recursive
-        working-directory: ${{ env.TF_ENV_DIR }}
-
-      # Generate the plan using the environment's tfvars file
-      - name: Terraform Plan
-        id: plan
-        run: terraform plan -out=${{ env.TF_PLAN_FILE }} -var-file="${{ env.ENV_NAME }}.tfvars" -detailed-exitcode
-        working-directory: ${{ env.TF_ENV_DIR }}
-
-      - name: Upload Terraform Plan Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: prod-plan-artifact
-          path: ${{ env.TF_ENV_DIR }}/${{ env.TF_PLAN_FILE }}
-
-
-  # ====================================================================
-  # JOB 4: APPLY - PRODUCTION (Requires Manual Approval)
-  # ====================================================================
-  prod_apply:
-    name: 'Prod - Apply'
-    runs-on: ubuntu-latest
-    needs: [prod_plan]
-    if: success() && github.ref == 'refs/heads/production' 
-
-    # CRITICAL: Use the 'production' environment here to enforce manual approval gates
-    environment: 
-      name: production
-      url: https://portal.azure.com/ # Optional link for quick access
-
-    env:
-      ENV_NAME: prod
-      TF_ENV_DIR: environments/prod
-      
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.8.5
-
-      - name: Download Terraform Plan Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: prod-plan-artifact
-          path: ${{ env.TF_ENV_DIR }}
-
-      - name: Terraform Init (for apply context)
-        run: |
-          terraform init -reconfigure \
-            -backend-config="resource_group_name=${{ env.BACKEND_RG_NAME }}" \
-            -backend-config="storage_account_name=${{ env.BACKEND_STORAGE_ACCOUNT }}" \
-            -backend-config="container_name=${{ env.BACKEND_CONTAINER_NAME }}" \
-            -backend-config="key=${{ env.ENV_NAME }}/${{ github.sha }}.tfstate"
-        working-directory: ${{ env.TF_ENV_DIR }}
-
-      - name: Terraform Apply
-        run: terraform apply -auto-approve ${{ env.TF_PLAN_FILE }}
+        run: terraform apply -auto-approve ${{ env.TF_PLAN_FILE }} -var-file="${{ env.ENV_NAME }}.tfvars" 
         working-directory: ${{ env.TF_ENV_DIR }}
