@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - feature/module
-      - production  # Listen for pushes to both feature/module (for dev) and production branches
+      - qa  # Listen for pushes to both feature/module (for dev) and qa branches
       
 # ADDED: This permission is required for the azure/login action to function correctly,
 # even when using Service Principal secrets, as it handles token exchange internally.
@@ -158,12 +158,12 @@ jobs:
 
 
   # ====================================================================
-  # JOB 3: PLAN - PRODUCTION (Triggered by 'production' branch)
+  # JOB 3: PLAN - qa (Triggered by 'qa' branch)
   # ====================================================================
   prod_plan:
     name: 'Prod - Plan'
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/production'
+    if: github.ref == 'refs/heads/qa'
     
     env:
       ENV_NAME: prod
@@ -221,16 +221,16 @@ jobs:
 
 
   # ====================================================================
-  # JOB 4: APPLY - PRODUCTION (Requires Manual Approval)
+  # JOB 4: APPLY - qa (Requires Manual Approval)
   # ====================================================================
   prod_apply:
     name: 'Prod - Apply'
     runs-on: ubuntu-latest
     needs: [prod_plan]
-    if: success() && github.ref == 'refs/heads/production' 
+    if: success() && github.ref == 'refs/heads/qa' 
 
     environment: 
-      name: production
+      name: qa
       url: https://portal.azure.com/ 
 
     env:
@@ -270,5 +270,5 @@ jobs:
         working-directory: ${{ env.TF_ENV_DIR }}
 
       - name: Terraform Apply
-        run: terraform apply -auto-approve ${{ env.TF_PLAN_FILE }}
+        run: terraform apply -auto-approve ${{ env.TF_PLAN_FILE }} -var-file="${{ env.ENV_NAME }}.tfvars"
         working-directory: ${{ env.TF_ENV_DIR }}
