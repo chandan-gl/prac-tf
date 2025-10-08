@@ -255,5 +255,5 @@ jobs:
         working-directory: ${{ env.TF_ENV_DIR }}
 
       - name: Terraform Apply
-        run: terraform apply -auto-approve ${{ env.TF_PLAN_FILE }} -var-file="${{ env.ENV_NAME }}.tfvars"
+        run: terraform apply -auto-approve ${{ env.TF_PLAN_FILE }}
         working-directory: ${{ env.TF_ENV_DIR }}
