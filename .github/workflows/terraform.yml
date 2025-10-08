@@ -62,6 +62,15 @@ jobs:
         with:
           terraform_version: 1.8.5
 
+       # ADDED: Debug step to list files in the working directory and its parent.
+      - name: Debug File Paths
+        run: |
+          echo "Listing files in current working directory (${{ env.TF_ENV_DIR }}):"
+          ls -al
+          echo "Listing files in parent directory (expected location of .tfvars):"
+          ls -al ..
+        working-directory: ${{ env.TF_ENV_DIR }}
+
       # DEBUG STEP: Verify paths before init
       - name: Debug Environment Variables
         run: |
@@ -87,7 +96,7 @@ jobs:
       # FIX APPLIED: Path reverted to look for the file in the current working directory
       - name: Terraform Plan
         id: plan
-        run: terraform plan -out=${{ env.TF_PLAN_FILE }} -var-file="${{ env.ENV_NAME }}.tfvars" -detailed-exitcode
+        run: terraform plan -out=${{ env.TF_PLAN_FILE }} -var-file="../${{ env.ENV_NAME }}.tfvars" -detailed-exitcode
         working-directory: ${{ env.TF_ENV_DIR }}
 
       - name: Upload Terraform Plan Artifact
