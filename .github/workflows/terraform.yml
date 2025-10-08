@@ -78,7 +78,11 @@ jobs:
     name: 'Terraform Plan & Artifact'
     runs-on: ubuntu-latest
     needs: [validate]
-    environment: plan_stage # Optional: Use an environment for secrets/variables
+    env:
+      ENV_NAME: dev
+      # TF_ENV_DIR points to the root directory for this environment's code
+      TF_ENV_DIR: environments/dev
+
 
     steps:
       - name: Checkout Code
@@ -110,7 +114,7 @@ jobs:
       # Generate the plan and save it to the workspace
       - name: Terraform Plan
         id: plan
-        run: terraform plan -out=${{ env.TF_PLAN_FILE }} -var-file="${{ env.ENV_NAME }}.tfvars" -detailed-exitcode
+        run: terraform plan -out=${{ env.TF_PLAN_FILE }} -var-file="${{ env.ENV_NAME}}.tfvars" -detailed-exitcode
         working-directory: ${{ env.TF_ENV_DIR }}
 
       # Upload the binary plan file as an artifact
@@ -129,6 +133,10 @@ jobs:
     name: 'Terraform Apply'
     runs-on: ubuntu-latest
     needs: [plan]
+    env:
+      ENV_NAME: dev
+      # TF_ENV_DIR points to the root directory for this environment's code
+      TF_ENV_DIR: environments/dev
     
     # Use environment for manual approval gating and traceability.
     # You MUST create a protected environment named 'production' in your GitHub repository settings.
