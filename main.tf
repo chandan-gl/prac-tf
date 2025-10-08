@@ -1,3 +1,4 @@
+
 data "azurerm_resource_group" "everdriven_rg" {
   name = var.resource_group_name
 }
