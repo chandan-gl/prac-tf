@@ -5,6 +5,12 @@ on:
     branches:
       - feature/module
       - production  # Listen for pushes to both feature/module (for dev) and production branches
+      
+# ADDED: This permission is required for the azure/login action to function correctly,
+# even when using Service Principal secrets, as it handles token exchange internally.
+permissions:
+  id-token: write # Required for OIDC and token-based authentication
+  contents: read # Default required for checking out code
 
 # Define reusable secrets and parameters
 env:
