@@ -53,7 +53,7 @@ jobs:
             -backend-config="resource_group_name=adf_project" \
             -backend-config="storage_account_name=practeststorage" \
             -backend-config="container_name=tfstate0310" \
-            -backend-config="key=tfstate"
+            -backend-config="key=terraform.tfstate"
         working-directory: ${{ env.TF_WORKING_DIRECTORY }}
         
       # Generate the destruction plan
