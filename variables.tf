@@ -35,3 +35,28 @@ variable "resource_group_name" {
   type        = string
   default     = "testdriven-dev-rg"
 }
+
+variable "backend_resource_group_name" {
+  description = "Resource group name for Terraform backend"
+  type        = string
+  default     = "adf_project"
+}
+
+variable "backend_storage_account_name" {
+  description = "Storage account name for Terraform backend"
+  type        = string
+  default     = "practeststorage"
+}
+
+variable "backend_container_name" {
+  description = "Container name for Terraform backend"
+  type        = string
+  default     = "tfstate0310"
+}
+
+variable "backend_key" {
+  description = "State file key for Terraform backend"
+  type        = string
+  default     = "terraform.tfstate"
+
+}
